@@ -1,0 +1,1030 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CupCatch — Multiplayer</title>
+
+    <!--
+      ═══════════════════════════════════════════════════════
+      SETUP INSTRUCTIONS
+      ═══════════════════════════════════════════════════════
+      1. Create a free Supabase project at https://supabase.com
+      2. In your project, go to SQL Editor and run:
+
+          create table if not exists sessions (
+            code        text primary key,
+            host_id     text not null,
+            status      text not null default 'lobby',
+            end_at      bigint,
+            created_at  bigint
+          );
+
+          create table if not exists players (
+            id          text primary key,
+            session     text not null,
+            name        text not null,
+            color       text not null,
+            score       int  not null default 0,
+            x           float not null default 0.5
+          );
+
+          -- Enable Realtime on both tables in Supabase dashboard:
+          -- Database → Replication → toggle on "sessions" and "players"
+
+      3. Copy your project URL and anon key from
+         Settings → API and paste them below.
+      ═══════════════════════════════════════════════════════
+    -->
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Boogaloo&family=Nunito:wght@400;600;700;800&display=swap');
+
+        :root {
+            --bg: #0d0d1a; --surface: #16162a; --border: #2a2a4a;
+            --accent: #f7c948; --accent2: #ff6b6b; --text: #e8e8ff; --muted: #6b6b9a; --radius: 16px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Nunito', sans-serif; background: var(--bg); color: var(--text);
+            min-height: 100vh; display: flex; flex-direction: column; align-items: center; overflow-x: hidden;
+        }
+        body::before {
+            content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+            background-image:
+                    radial-gradient(1px 1px at 10% 20%, rgba(255,255,255,0.4) 0%, transparent 100%),
+                    radial-gradient(1px 1px at 30% 60%, rgba(255,255,255,0.3) 0%, transparent 100%),
+                    radial-gradient(1px 1px at 60% 10%, rgba(255,255,255,0.5) 0%, transparent 100%),
+                    radial-gradient(1px 1px at 80% 80%, rgba(255,255,255,0.2) 0%, transparent 100%),
+                    radial-gradient(2px 2px at 90% 30%, rgba(255,255,255,0.4) 0%, transparent 100%);
+        }
+        header { width: 100%; text-align: center; padding: 24px 16px 12px; position: relative; z-index: 1; }
+        header h1 {
+            font-family: 'Boogaloo', cursive; font-size: clamp(2.2rem, 6vw, 3.5rem); color: var(--accent);
+            letter-spacing: 2px; text-shadow: 0 0 40px rgba(247,201,72,0.4), 3px 3px 0 #b8952e;
+        }
+        header p { color: var(--muted); font-size: 0.9rem; margin-top: 4px; letter-spacing: 1px; text-transform: uppercase; }
+
+        .screen {
+            position: relative; z-index: 1; width: 100%; max-width: 480px; padding: 16px;
+            display: none; flex-direction: column; gap: 16px; animation: fadeUp 0.35s ease;
+        }
+        .screen.active { display: flex; }
+        @keyframes fadeUp { from { opacity:0; transform:translateY(24px); } to { opacity:1; transform:translateY(0); } }
+
+        .card {
+            background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+            padding: 24px; display: flex; flex-direction: column; gap: 14px;
+        }
+        .card h2 { font-family: 'Boogaloo', cursive; font-size: 1.5rem; color: var(--accent); letter-spacing: 1px; }
+
+        label { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); display: block; margin-bottom: 6px; }
+
+        input[type="text"] {
+            width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+            padding: 12px 16px; color: var(--text); font-family: 'Nunito', sans-serif; font-size: 1rem; outline: none; transition: border-color 0.2s;
+        }
+        input[type="text"]:focus { border-color: var(--accent); }
+
+        .color-row { display: flex; gap: 10px; flex-wrap: wrap; }
+        .color-swatch {
+            width: 36px; height: 36px; border-radius: 50%; cursor: pointer;
+            border: 3px solid transparent; transition: transform 0.15s, border-color 0.15s; position: relative;
+        }
+        .color-swatch:hover { transform: scale(1.15); }
+        .color-swatch.selected { border-color: white; transform: scale(1.2); }
+        .color-swatch.selected::after {
+            content: '✓'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+            color: white; font-size: 16px; font-weight: 900; text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+        }
+
+        .btn {
+            padding: 14px 24px; border: none; border-radius: 12px; font-family: 'Boogaloo', cursive;
+            font-size: 1.2rem; letter-spacing: 1px; cursor: pointer; transition: transform 0.12s, box-shadow 0.12s; text-align: center;
+        }
+        .btn:active { transform: scale(0.96); }
+        .btn-primary { background: var(--accent); color: #1a1200; box-shadow: 0 4px 20px rgba(247,201,72,0.35); }
+        .btn-primary:hover { box-shadow: 0 6px 28px rgba(247,201,72,0.55); }
+        .btn-secondary { background: var(--border); color: var(--text); }
+
+        .divider {
+            text-align: center; color: var(--muted); font-size: 0.85rem; font-weight: 700;
+            letter-spacing: 2px; text-transform: uppercase; position: relative;
+        }
+        .divider::before, .divider::after { content: ''; position: absolute; top: 50%; width: 35%; height: 1px; background: var(--border); }
+        .divider::before { left: 0; } .divider::after { right: 0; }
+
+        #session-code-display {
+            background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px;
+            font-family: 'Boogaloo', cursive; font-size: 1.8rem; letter-spacing: 6px; text-align: center; color: var(--accent); user-select: all;
+        }
+        .share-link-row { display: flex; gap: 8px; }
+        .share-link-row input { flex: 1; font-size: 0.8rem; padding: 10px 12px; }
+        .share-link-row .btn { padding: 10px 16px; font-size: 0.95rem; white-space: nowrap; }
+
+        #player-list { display: flex; flex-direction: column; gap: 8px; }
+        .player-chip {
+            display: flex; align-items: center; gap: 10px; background: var(--bg); border: 1px solid var(--border);
+            border-radius: 10px; padding: 8px 14px; font-weight: 700; font-size: 0.95rem; animation: chipIn 0.25s ease;
+        }
+        @keyframes chipIn { from { opacity:0; transform:translateX(-10px); } to { opacity:1; transform:translateX(0); } }
+        .player-dot { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; }
+        .host-badge {
+            margin-left: auto; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px;
+            color: var(--accent); border: 1px solid var(--accent); border-radius: 6px; padding: 2px 7px;
+        }
+
+        #game-screen { max-width: 100%; padding: 0; gap: 0; }
+        #game-screen.active { position: fixed; inset: 0; height: 100dvh; width: 100vw; }
+        #game-header {
+            display: flex; justify-content: space-between; align-items: center; padding: 10px 16px;
+            background: var(--surface); border-bottom: 1px solid var(--border); position: relative; z-index: 2;
+        }
+        #game-header h2 { font-family: 'Boogaloo', cursive; color: var(--accent); font-size: 1.5rem; letter-spacing: 1px; }
+        #timer-display { font-family: 'Boogaloo', cursive; font-size: 2rem; color: white; min-width: 60px; text-align: center; line-height: 1; }
+        #timer-display.urgent { color: var(--accent2); animation: pulse 0.5s infinite alternate; }
+        @keyframes pulse { from { transform:scale(1); } to { transform:scale(1.1); } }
+
+        #score-board {
+            display: flex; gap: 8px; padding: 8px 12px; background: var(--surface);
+            border-bottom: 1px solid var(--border); overflow-x: auto; position: relative; z-index: 2;
+        }
+        .score-chip {
+            display: flex; align-items: center; gap: 6px; background: var(--bg); border: 1px solid var(--border);
+            border-radius: 8px; padding: 4px 10px; font-size: 0.85rem; font-weight: 800; white-space: nowrap; flex-shrink: 0;
+        }
+        #arena-wrapper {
+            position: relative; width: 100%; flex: 1; min-height: 0;
+            background: linear-gradient(180deg, #0a0a18 0%, #0d1020 100%); overflow: hidden; touch-action: none;
+        }
+        #arena { width: 100%; height: 100%; display: block; }
+
+        #results-list { display: flex; flex-direction: column; gap: 10px; }
+        .result-row {
+            display: flex; align-items: center; gap: 12px; background: var(--bg); border: 1px solid var(--border);
+            border-radius: 12px; padding: 12px 16px; font-weight: 700; font-size: 1rem;
+        }
+        .result-row.winner { border-color: var(--accent); background: rgba(247,201,72,0.07); }
+        .rank-badge { font-family: 'Boogaloo', cursive; font-size: 1.3rem; width: 32px; text-align: center; flex-shrink: 0; }
+        .result-score { margin-left: auto; font-family: 'Boogaloo', cursive; font-size: 1.4rem; color: var(--accent); }
+        #winner-banner {
+            font-family: 'Boogaloo', cursive; font-size: 1.6rem; text-align: center;
+            color: var(--accent); text-shadow: 0 0 30px rgba(247,201,72,0.5); animation: fadeUp 0.5s ease;
+        }
+        .status-text { color: var(--muted); font-size: 0.85rem; text-align: center; }
+        .error-text  { color: var(--accent2); font-size: 0.85rem; text-align: center; }
+        #start-btn-container { display: flex; flex-direction: column; gap: 8px; }
+
+        /* Config warning banner */
+        #config-warning {
+            position: fixed; bottom: 0; left: 0; right: 0; z-index: 1000;
+            background: var(--accent2); color: white; text-align: center;
+            padding: 10px 16px; font-size: 0.85rem; font-weight: 700;
+            display: none;
+        }
+
+        .confetto {
+            position: fixed; width: 10px; height: 10px; border-radius: 2px;
+            pointer-events: none; z-index: 999; animation: confettoFall linear forwards;
+        }
+        @keyframes confettoFall {
+            0%   { transform: translateY(-20px) rotate(0deg);   opacity: 1; }
+            100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="config-warning">
+    ⚠️ Supabase is not configured. Add your project URL and anon key to the script to enable cross-device play.
+</div>
+
+<header>
+    <h1>&#127942; CupCatch</h1>
+    <p>Multiplayer Ball Game</p>
+</header>
+
+<!-- SETUP -->
+<div class="screen active" id="setup-screen">
+    <div class="card">
+        <h2>&#128100; Your Profile</h2>
+        <div>
+            <label>Your Name</label>
+            <input type="text" id="player-name" placeholder="Enter your name..." maxlength="16">
+        </div>
+        <div>
+            <label>Your Cup Colour</label>
+            <div class="color-row" id="color-picker"></div>
+        </div>
+    </div>
+    <div class="card">
+        <h2>&#127918; New Game</h2>
+        <button class="btn btn-primary" id="btn-create">Create Session</button>
+    </div>
+    <div class="divider">or join</div>
+    <div class="card">
+        <h2>&#128279; Join Game</h2>
+        <div>
+            <label>Session Code</label>
+            <input type="text" id="join-code" placeholder="e.g. ABC123" maxlength="6"
+                   style="text-transform:uppercase;letter-spacing:4px;font-size:1.2rem;font-family:'Boogaloo',cursive;">
+        </div>
+        <button class="btn btn-secondary" id="btn-join">Join Session</button>
+        <div class="error-text" id="join-error"></div>
+    </div>
+</div>
+
+<!-- LOBBY -->
+<div class="screen" id="lobby-screen">
+    <div class="card">
+        <h2>&#128203; Session Code</h2>
+        <div id="session-code-display">------</div>
+        <div>
+            <label>Share this link</label>
+            <div class="share-link-row">
+                <input type="text" id="share-link" readonly>
+                <button class="btn btn-secondary" id="btn-copy-link">Copy</button>
+            </div>
+        </div>
+    </div>
+    <div class="card">
+        <h2>&#128101; Players</h2>
+        <div id="player-list"></div>
+        <div class="status-text" id="lobby-status">Waiting for players...</div>
+    </div>
+    <div id="start-btn-container">
+        <button class="btn btn-primary" id="start-btn" style="display:none">&#128640; Start Game!</button>
+        <div class="status-text" id="waiting-host-msg" style="display:none">Waiting for host to start...</div>
+    </div>
+    <button class="btn btn-secondary" id="btn-leave">&#8592; Leave</button>
+</div>
+
+<!-- GAME -->
+<div class="screen" id="game-screen">
+    <div id="game-header">
+        <h2>CupCatch</h2>
+        <div id="timer-display">30</div>
+        <span id="my-score-header" style="font-family:'Boogaloo',cursive;font-size:1.2rem;color:#aaa">&#9918; 0</span>
+    </div>
+    <div id="score-board"></div>
+    <div id="arena-wrapper">
+        <canvas id="arena"></canvas>
+    </div>
+</div>
+
+<!-- RESULTS -->
+<div class="screen" id="results-screen">
+    <div id="winner-banner">&#127942; Results!</div>
+    <div class="card">
+        <h2>Final Scores</h2>
+        <div id="results-list"></div>
+    </div>
+    <button class="btn btn-primary" id="btn-back-lobby">&#128260; Play Again</button>
+    <button class="btn btn-secondary" id="btn-back-home">&#127968; Home</button>
+</div>
+
+<!-- Supabase & PeerJS from CDN -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
+<script>
+	// ═══════════════════════════════════════════════════════
+	//  CONFIG — paste your Supabase credentials here
+	// ═══════════════════════════════════════════════════════
+	var SUPABASE_URL  = 'https://irlpzgvunfthiydtwdrg.supabase.co';   // e.g. https://xxxx.supabase.co
+	var SUPABASE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlybHB6Z3Z1bmZ0aGl5ZHR3ZHJnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQyNjEwODYsImV4cCI6MjA4OTgzNzA4Nn0.YH1hUcq_apemxkDVFigFIbefL9l4Ug3UCEAoQWFaO18';
+
+	// ═══════════════════════════════════════════════════════
+	//  Supabase client + fallback detection
+	// ═══════════════════════════════════════════════════════
+	var sb = null;
+	var useSupabase = false;
+
+	function initSupabase() {
+		if (SUPABASE_URL === 'YOUR_SUPABASE_URL' || SUPABASE_KEY === 'YOUR_SUPABASE_ANON_KEY') {
+			document.getElementById('config-warning').style.display = 'block';
+			return;
+		}
+		try {
+			sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+			useSupabase = true;
+		} catch(e) {
+			console.warn('Supabase init failed:', e);
+		}
+	}
+
+	// ═══════════════════════════════════════════════════════
+	//  LocalDB fallback (same-device tabs only)
+	// ═══════════════════════════════════════════════════════
+	var bc = null;
+	try { bc = new BroadcastChannel('cupcatch'); } catch(e) {}
+	var lsListeners = {};
+
+	if (bc) {
+		bc.onmessage = function(e) { lsNotify(e.data.path); };
+	}
+
+	function lsKey(p)  { return 'cc:' + p; }
+	function lsRead(p) { try { return JSON.parse(localStorage.getItem(lsKey(p))); } catch(e) { return null; } }
+	function lsWrite(p, v) {
+		localStorage.setItem(lsKey(p), JSON.stringify(v));
+		lsNotify(p);
+		if (bc) try { bc.postMessage({ path: p }); } catch(e) {}
+	}
+	function lsNotify(changed) {
+		Object.keys(lsListeners).forEach(function(p) {
+			if (changed === p || changed.indexOf(p+'/') === 0 || p.indexOf(changed+'/') === 0) {
+				lsListeners[p].forEach(function(cb) { cb(lsRead(p)); });
+			}
+		});
+	}
+	function lsListen(path, cb) {
+		if (!lsListeners[path]) lsListeners[path] = [];
+		lsListeners[path].push(cb);
+		cb(lsRead(path));
+		return function() { lsListeners[path] = lsListeners[path].filter(function(f) { return f !== cb; }); };
+	}
+
+	// ═══════════════════════════════════════════════════════
+	//  Unified DB API
+	//  All lobby/session/score operations go through here.
+	//  Routes to Supabase when configured, localStorage otherwise.
+	// ═══════════════════════════════════════════════════════
+
+	// --- Sessions ---
+	async function dbCreateSession(code, hostId) {
+		if (useSupabase) {
+			var res = await sb.from('sessions').insert({ code: code, host_id: hostId, status: 'lobby', created_at: Date.now() });
+			if (res.error) throw res.error;
+		} else {
+			lsWrite('sessions/'+code, { code: code, host_id: hostId, status: 'lobby', created_at: Date.now() });
+		}
+	}
+
+	async function dbGetSession(code) {
+		if (useSupabase) {
+			var res = await sb.from('sessions').select('*').eq('code', code).single();
+			return res.data;
+		} else {
+			return lsRead('sessions/'+code);
+		}
+	}
+
+	async function dbUpdateSession(code, delta) {
+		if (useSupabase) {
+			var res = await sb.from('sessions').update(delta).eq('code', code);
+			if (res.error) throw res.error;
+		} else {
+			var cur = lsRead('sessions/'+code) || {};
+			lsWrite('sessions/'+code, Object.assign(cur, delta));
+		}
+	}
+
+	// --- Players ---
+	async function dbUpsertPlayer(player) {
+		// player = { id, session, name, color, score, x }
+		if (useSupabase) {
+			var res = await sb.from('players').upsert(player);
+			if (res.error) throw res.error;
+		} else {
+			var all = lsRead('sessions/'+player.session+'/players') || {};
+			all[player.id] = player;
+			lsWrite('sessions/'+player.session+'/players', all);
+		}
+	}
+
+	async function dbGetPlayers(code) {
+		if (useSupabase) {
+			var res = await sb.from('players').select('*').eq('session', code);
+			if (res.error || !res.data) return {};
+			var map = {};
+			res.data.forEach(function(p) { map[p.id] = p; });
+			return map;
+		} else {
+			return lsRead('sessions/'+code+'/players') || {};
+		}
+	}
+
+	async function dbUpdateScore(playerId, sessionCode, score) {
+		if (useSupabase) {
+			await sb.from('players').update({ score: score }).eq('id', playerId);
+		} else {
+			var all = lsRead('sessions/'+sessionCode+'/players') || {};
+			if (all[playerId]) all[playerId].score = score;
+			lsWrite('sessions/'+sessionCode+'/players', all);
+		}
+	}
+
+	async function dbRemovePlayer(playerId, sessionCode) {
+		if (useSupabase) {
+			await sb.from('players').delete().eq('id', playerId);
+		} else {
+			var all = lsRead('sessions/'+sessionCode+'/players') || {};
+			delete all[playerId];
+			lsWrite('sessions/'+sessionCode+'/players', all);
+		}
+	}
+
+	// --- Realtime subscriptions ---
+	// Returns an unsubscribe function.
+	function dbListenPlayers(code, cb) {
+		if (useSupabase) {
+			// Fetch initial state, then subscribe to changes
+			dbGetPlayers(code).then(cb);
+			var channel = sb.channel('players:'+code)
+				.on('postgres_changes', { event: '*', schema: 'public', table: 'players', filter: 'session=eq.'+code },
+					function() { dbGetPlayers(code).then(cb); })
+				.subscribe();
+			return function() { sb.removeChannel(channel); };
+		} else {
+			return lsListen('sessions/'+code+'/players', cb);
+		}
+	}
+
+	function dbListenSession(code, cb) {
+		if (useSupabase) {
+			dbGetSession(code).then(cb);
+			var channel = sb.channel('session:'+code)
+				.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sessions', filter: 'code=eq.'+code },
+					function(payload) { cb(payload.new); })
+				.subscribe();
+			return function() { sb.removeChannel(channel); };
+		} else {
+			return lsListen('sessions/'+code, cb);
+		}
+	}
+
+	function dbPushId() {
+		return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+	}
+
+	// ═══════════════════════════════════════════════════════
+	//  PeerJS — real-time cup positions over WebRTC
+	//
+	//  Architecture:
+	//    Host opens a Peer with id = 'cupcatch-' + sessionCode
+	//    Guests connect to that peer id
+	//    All cup position messages fan out:
+	//      Guest → Host → all other Guests (host relays)
+	//    Score updates go via Supabase/localStorage (low frequency)
+	// ═══════════════════════════════════════════════════════
+	var peer = null;
+	var hostConn = null;       // guest's connection to the host
+	var guestConns = {};       // host's connections to guests, keyed by peerId
+
+	function peerHostId(code) { return 'cupcatch-' + code.toLowerCase(); }
+
+	function initPeerHost(code) {
+		peer = new Peer(peerHostId(code));
+		peer.on('open', function(id) { console.log('PeerJS host open:', id); });
+		peer.on('connection', function(conn) {
+			conn.on('open', function() {
+				guestConns[conn.peer] = conn;
+				console.log('Guest connected:', conn.peer);
+			});
+			conn.on('data', function(data) {
+				// Relay cup position from this guest to all others + apply locally
+				if (data.type === 'pos') {
+					applyRemotePos(data.id, data.x);
+					// Relay to all other guests
+					Object.keys(guestConns).forEach(function(pid) {
+						if (pid !== conn.peer) {
+							try { guestConns[pid].send(data); } catch(e) {}
+						}
+					});
+				}
+			});
+			conn.on('close', function() { delete guestConns[conn.peer]; });
+		});
+		peer.on('error', function(e) { console.warn('PeerJS host error:', e); });
+	}
+
+	function initPeerGuest(code) {
+		peer = new Peer(); // random id for guests
+		peer.on('open', function() {
+			hostConn = peer.connect(peerHostId(code), { reliable: false });
+			hostConn.on('open', function() { console.log('Connected to host peer'); });
+			hostConn.on('data', function(data) {
+				if (data.type === 'pos') applyRemotePos(data.id, data.x);
+			});
+			hostConn.on('error', function(e) { console.warn('PeerJS guest error:', e); });
+		});
+		peer.on('error', function(e) { console.warn('PeerJS peer error:', e); });
+	}
+
+	function sendPosUpdate(x) {
+		var msg = { type: 'pos', id: myId, x: x };
+		if (isHost) {
+			// Host applies locally and relays to guests
+			applyRemotePos(myId, x);
+			Object.keys(guestConns).forEach(function(pid) {
+				try { guestConns[pid].send(msg); } catch(e) {}
+			});
+		} else if (hostConn && hostConn.open) {
+			try { hostConn.send(msg); } catch(e) {}
+		}
+	}
+
+	function applyRemotePos(id, x) {
+		if (players[id]) players[id].x = x;
+	}
+
+	function destroyPeer() {
+		if (peer) { try { peer.destroy(); } catch(e) {} peer = null; }
+		hostConn = null;
+		guestConns = {};
+	}
+
+	// ═══════════════════════════════════════════════════════
+	//  Game state
+	// ═══════════════════════════════════════════════════════
+	var COLORS = ['#ff6b6b','#ffa94d','#ffd43b','#69db7c','#4dabf7','#da77f2','#f783ac','#38d9a9','#748ffc','#a9e34b'];
+	var BALL_RADIUS = 14, GRAVITY = 0.285, BALL_INTERVAL = 650, SYNC_INTERVAL = 50, GAME_MS = 30000;
+
+	var myId = null, sessionCode = null, isHost = false;
+	var unsubSession = null, unsubPlayers = null, gameLoopId = null;
+	var players = {}, myScore = 0, gameActive = false;
+	var canvas, ctx, arenaW, arenaH;
+	var balls = [], particles = [];
+	var lastBallTime = 0, lastSync = 0;
+
+	// ═══════════════════════════════════════════════════════
+	//  Boot
+	// ═══════════════════════════════════════════════════════
+	document.addEventListener('DOMContentLoaded', function() {
+		initSupabase();
+		buildColorPicker();
+		checkUrlSession();
+
+		document.getElementById('btn-create').addEventListener('click', createSession);
+		document.getElementById('btn-join').addEventListener('click', joinSession);
+		document.getElementById('btn-copy-link').addEventListener('click', copyLink);
+		document.getElementById('btn-leave').addEventListener('click', leaveLobby);
+		document.getElementById('start-btn').addEventListener('click', startGame);
+		document.getElementById('btn-back-lobby').addEventListener('click', backToLobby);
+		document.getElementById('btn-back-home').addEventListener('click', backToHome);
+	});
+
+	function buildColorPicker() {
+		var container = document.getElementById('color-picker');
+		COLORS.forEach(function(c, i) {
+			var sw = document.createElement('div');
+			sw.className = 'color-swatch' + (i === 0 ? ' selected' : '');
+			sw.style.background = c;
+			sw.dataset.color = c;
+			sw.addEventListener('click', function() {
+				document.querySelectorAll('.color-swatch').forEach(function(s) { s.classList.remove('selected'); });
+				sw.classList.add('selected');
+			});
+			container.appendChild(sw);
+		});
+	}
+
+	function getSelectedColor() {
+		var sw = document.querySelector('.color-swatch.selected');
+		return sw ? sw.dataset.color : COLORS[0];
+	}
+
+	function getPlayerName() {
+		return document.getElementById('player-name').value.trim() || 'Player';
+	}
+
+	function checkUrlSession() {
+		var code = new URLSearchParams(window.location.search).get('session');
+		if (code) document.getElementById('join-code').value = code.toUpperCase();
+	}
+
+	function genCode() {
+		var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+		var out = '';
+		for (var i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)];
+		return out;
+	}
+
+	function showScreen(id) {
+		document.querySelectorAll('.screen').forEach(function(s) { s.classList.remove('active'); });
+		document.getElementById(id).classList.add('active');
+	}
+
+	// ═══════════════════════════════════════════════════════
+	//  Create / Join
+	// ═══════════════════════════════════════════════════════
+	async function createSession() {
+		myId = dbPushId();
+		sessionCode = genCode();
+		isHost = true;
+
+		try {
+			await dbCreateSession(sessionCode, myId);
+			await dbUpsertPlayer({ id: myId, session: sessionCode, name: getPlayerName(), color: getSelectedColor(), score: 0, x: 0.5 });
+			initPeerHost(sessionCode);
+			enterLobby();
+		} catch(e) {
+			alert('Could not create session: ' + e.message);
+		}
+	}
+
+	async function joinSession() {
+		var code = document.getElementById('join-code').value.trim().toUpperCase();
+		var errEl = document.getElementById('join-error');
+		errEl.textContent = '';
+
+		if (code.length < 4) { errEl.textContent = 'Enter a valid code.'; return; }
+
+		try {
+			var session = await dbGetSession(code);
+			if (!session) { errEl.textContent = 'Session not found. Check the code.'; return; }
+			if (session.status === 'playing') { errEl.textContent = 'Game already in progress!'; return; }
+
+			myId = dbPushId();
+			sessionCode = code;
+			isHost = false;
+
+			await dbUpsertPlayer({ id: myId, session: sessionCode, name: getPlayerName(), color: getSelectedColor(), score: 0, x: 0.5 });
+			initPeerGuest(sessionCode);
+			enterLobby();
+		} catch(e) {
+			errEl.textContent = 'Error joining: ' + e.message;
+		}
+	}
+
+	// ═══════════════════════════════════════════════════════
+	//  Lobby
+	// ═══════════════════════════════════════════════════════
+	function enterLobby() {
+		showScreen('lobby-screen');
+		document.getElementById('session-code-display').textContent = sessionCode;
+		var link = location.origin + location.pathname + '?session=' + sessionCode;
+		document.getElementById('share-link').value = link;
+
+		unsubPlayers = dbListenPlayers(sessionCode, function(data) {
+			players = data || {};
+			renderPlayerList();
+		});
+
+		unsubSession = dbListenSession(sessionCode, function(data) {
+			if (!data) return;
+			if (data.status === 'playing' && !gameActive) initGame(data.end_at);
+		});
+	}
+
+	function renderPlayerList() {
+		var list = document.getElementById('player-list');
+		list.innerHTML = '';
+		var count = 0;
+
+		Object.keys(players).forEach(function(id) {
+			var p = players[id];
+			var hostId = p.session; // we'll fetch from session
+			var chip = document.createElement('div');
+			chip.className = 'player-chip';
+			chip.innerHTML =
+				'<div class="player-dot" style="background:' + p.color + '"></div>' +
+				'<span>' + p.name + '</span>';
+			list.appendChild(chip);
+			count++;
+		});
+
+		// Mark host badge async
+		dbGetSession(sessionCode).then(function(session) {
+			var hostId = session && session.host_id;
+			var chips = list.querySelectorAll('.player-chip');
+			var ids = Object.keys(players);
+			chips.forEach(function(chip, i) {
+				chip.querySelector('.host-badge') && chip.querySelector('.host-badge').remove();
+				if (ids[i] === hostId) {
+					var badge = document.createElement('span');
+					badge.className = 'host-badge';
+					badge.textContent = 'Host';
+					chip.appendChild(badge);
+				}
+			});
+			if (myId === hostId) {
+				document.getElementById('start-btn').style.display = 'block';
+				document.getElementById('waiting-host-msg').style.display = 'none';
+			} else {
+				document.getElementById('start-btn').style.display = 'none';
+				document.getElementById('waiting-host-msg').style.display = 'block';
+			}
+		});
+
+		document.getElementById('lobby-status').textContent =
+			count + ' player' + (count !== 1 ? 's' : '') + ' in lobby';
+	}
+
+	function copyLink() {
+		var link = document.getElementById('share-link').value;
+		navigator.clipboard.writeText(link).then(function() {
+			var btn = document.getElementById('btn-copy-link');
+			btn.textContent = 'Copied!';
+			setTimeout(function() { btn.textContent = 'Copy'; }, 2000);
+		});
+	}
+
+	async function leaveLobby() {
+		cleanup();
+		await dbRemovePlayer(myId, sessionCode);
+		showScreen('setup-screen');
+		history.replaceState({}, '', location.pathname);
+	}
+
+	// ═══════════════════════════════════════════════════════
+	//  Start
+	// ═══════════════════════════════════════════════════════
+	async function startGame() {
+		if (!isHost) return;
+		var endAt = Date.now() + GAME_MS;
+		await dbUpdateSession(sessionCode, { status: 'playing', end_at: endAt });
+	}
+
+	// ═══════════════════════════════════════════════════════
+	//  Game loop
+	// ═══════════════════════════════════════════════════════
+	function initGame(endAt) {
+		if (gameActive) return;
+		gameActive = true;
+		myScore = 0;
+		balls = []; particles = []; lastBallTime = 0;
+
+		showScreen('game-screen');
+		canvas = document.getElementById('arena');
+		ctx = canvas.getContext('2d');
+		resizeCanvas();
+		window.addEventListener('resize', resizeCanvas);
+		canvas.addEventListener('mousemove', onMouseMove);
+		canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+
+		// Keep scores in sync via Supabase/localStorage during game
+		if (unsubPlayers) unsubPlayers();
+		unsubPlayers = dbListenPlayers(sessionCode, function(data) {
+			if (!data) return;
+			// Merge: preserve live x positions from PeerJS, update scores from DB
+			Object.keys(data).forEach(function(id) {
+				if (id !== myId) {
+					var liveX = players[id] ? players[id].x : data[id].x;
+					players[id] = data[id];
+					players[id].x = liveX;
+				} else {
+					// Keep our own x; only update score from DB if we're behind (shouldn't happen)
+					data[id].x = players[id] ? players[id].x : data[id].x;
+					players[id] = data[id];
+				}
+			});
+			updateScoreBoard();
+		});
+
+		function loop() {
+			if (!gameActive) return;
+			var now = Date.now();
+			var remaining = Math.max(0, Math.ceil((endAt - now) / 1000));
+			var timerEl = document.getElementById('timer-display');
+			timerEl.textContent = remaining;
+			timerEl.className = remaining <= 5 ? 'urgent' : '';
+			spawnBalls(now);
+			updateBalls();
+			draw();
+			if (now >= endAt) { endGame(); return; }
+			gameLoopId = requestAnimationFrame(loop);
+		}
+		gameLoopId = requestAnimationFrame(loop);
+		updateScoreBoard();
+	}
+
+	function resizeCanvas() {
+		var w = document.getElementById('arena-wrapper');
+		canvas.width  = arenaW = w.clientWidth;
+		canvas.height = arenaH = w.clientHeight;
+	}
+
+	function onMouseMove(e) {
+		var rect = canvas.getBoundingClientRect();
+		moveCup(e.clientX - rect.left);
+	}
+	function onTouchMove(e) {
+		e.preventDefault();
+		var rect = canvas.getBoundingClientRect();
+		moveCup(e.touches[0].clientX - rect.left);
+	}
+
+	function moveCup(xPx) {
+		var xFrac = Math.max(0.04, Math.min(0.96, xPx / arenaW));
+		// Always update locally for instant response
+		if (players[myId]) players[myId].x = xFrac;
+
+		// Throttle the network send
+		var now = Date.now();
+		if (now - lastSync > SYNC_INTERVAL) {
+			lastSync = now;
+			sendPosUpdate(xFrac); // WebRTC — fast, peer-to-peer
+		}
+	}
+
+	function spawnBalls(now) {
+		if (now - lastBallTime > BALL_INTERVAL) {
+			lastBallTime = now;
+			balls.push({
+				x: Math.random() * (arenaW - 60) + 30,
+				y: -BALL_RADIUS,
+				vy: 1.5 + Math.random() * 1.5,
+				vx: (Math.random() - 0.5) * 1.5,
+				color: COLORS[Math.floor(Math.random() * COLORS.length)]
+			});
+		}
+	}
+
+	function updateBalls() {
+		var CW = 70;
+		for (var i = balls.length - 1; i >= 0; i--) {
+			var b = balls[i];
+			b.vy += GRAVITY; b.x += b.vx; b.y += b.vy;
+			if (b.x < BALL_RADIUS)          { b.x = BALL_RADIUS;          b.vx *= -0.7; }
+			if (b.x > arenaW - BALL_RADIUS) { b.x = arenaW - BALL_RADIUS; b.vx *= -0.7; }
+
+			var caught = false;
+			var pids = Object.keys(players);
+			for (var j = 0; j < pids.length; j++) {
+				var pid = pids[j], p = players[pid];
+				var cx = (p.x || 0.5) * arenaW, cy = arenaH - 30;
+				if (b.y + BALL_RADIUS >= cy - 10 && b.y - BALL_RADIUS <= cy + 30 &&
+					b.x >= cx - CW/2 && b.x <= cx + CW/2) {
+					caught = true;
+					if (pid === myId) {
+						myScore++;
+						// Score written to Supabase/localStorage (low frequency is fine)
+						dbUpdateScore(myId, sessionCode, myScore);
+						document.getElementById('my-score-header').textContent = '⚾ ' + myScore;
+						spawnParticles(b.x, b.y, p.color);
+					}
+					break;
+				}
+			}
+			if (caught || b.y > arenaH + 50) balls.splice(i, 1);
+		}
+	}
+
+	function spawnParticles(x, y, color) {
+		for (var i = 0; i < 8; i++) {
+			particles.push({ x: x, y: y, vx: (Math.random()-0.5)*6, vy: -Math.random()*5-2, color: color, life: 1 });
+		}
+	}
+
+	function draw() {
+		ctx.clearRect(0, 0, arenaW, arenaH);
+
+		for (var i = 0; i < balls.length; i++) {
+			var b = balls[i];
+			ctx.beginPath();
+			ctx.arc(b.x, b.y, BALL_RADIUS, 0, Math.PI * 2);
+			var g = ctx.createRadialGradient(b.x-4, b.y-4, 2, b.x, b.y, BALL_RADIUS);
+			g.addColorStop(0, '#fff'); g.addColorStop(0.4, b.color); g.addColorStop(1, shade(b.color, -40));
+			ctx.fillStyle = g; ctx.fill();
+			ctx.strokeStyle = 'rgba(255,255,255,0.2)'; ctx.lineWidth = 1; ctx.stroke();
+		}
+
+		var pids = Object.keys(players);
+		for (var k = 0; k < pids.length; k++) {
+			var pid = pids[k], p = players[pid];
+			var cx = (p.x || 0.5) * arenaW, cy = arenaH - 30;
+			var CW = 70, CH = 40, isMe = pid === myId;
+			ctx.save();
+			ctx.shadowColor = p.color; ctx.shadowBlur = isMe ? 20 : 8;
+			ctx.beginPath();
+			ctx.moveTo(cx-CW/2+8, cy-CH); ctx.lineTo(cx+CW/2-8, cy-CH);
+			ctx.lineTo(cx+CW/2, cy);      ctx.lineTo(cx-CW/2, cy);
+			ctx.closePath();
+			var gr = ctx.createLinearGradient(cx-CW/2, cy-CH, cx+CW/2, cy);
+			gr.addColorStop(0, p.color); gr.addColorStop(1, shade(p.color, -30));
+			ctx.fillStyle = gr; ctx.fill();
+			ctx.beginPath();
+			ctx.moveTo(cx-CW/2+8, cy-CH); ctx.lineTo(cx+CW/2-8, cy-CH);
+			ctx.strokeStyle = '#fff'; ctx.lineWidth = isMe ? 3 : 2; ctx.stroke();
+			ctx.shadowBlur = 0; ctx.fillStyle = '#fff';
+			ctx.font = 'bold ' + (isMe ? 13 : 11) + 'px Nunito';
+			ctx.textAlign = 'center';
+			ctx.fillText(p.name || 'Player', cx, cy-CH-8);
+			ctx.restore();
+		}
+
+		for (var m = particles.length - 1; m >= 0; m--) {
+			var pt = particles[m];
+			pt.x += pt.vx; pt.y += pt.vy; pt.vy += 0.2; pt.life -= 0.06;
+			if (pt.life <= 0) { particles.splice(m, 1); continue; }
+			ctx.globalAlpha = pt.life;
+			ctx.beginPath(); ctx.arc(pt.x, pt.y, 5*pt.life, 0, Math.PI*2);
+			ctx.fillStyle = pt.color; ctx.fill();
+			ctx.globalAlpha = 1;
+		}
+	}
+
+	function shade(hex, amt) {
+		var n = parseInt(hex.replace('#',''), 16);
+		var r = Math.max(0, Math.min(255, (n>>16)+amt));
+		var g = Math.max(0, Math.min(255, ((n>>8)&0xff)+amt));
+		var b = Math.max(0, Math.min(255, (n&0xff)+amt));
+		return 'rgb('+r+','+g+','+b+')';
+	}
+
+	function updateScoreBoard() {
+		var sb = document.getElementById('score-board');
+		sb.innerHTML = '';
+		Object.keys(players).map(function(id) { return players[id]; })
+			.sort(function(a, b) { return (b.score||0)-(a.score||0); })
+			.forEach(function(p) {
+				var chip = document.createElement('div');
+				chip.className = 'score-chip';
+				chip.innerHTML = '<div class="player-dot" style="background:'+p.color+'"></div>'+
+					p.name+': <strong>'+(p.score||0)+'</strong>';
+				sb.appendChild(chip);
+			});
+		document.getElementById('my-score-header').textContent = '⚾ ' + myScore;
+	}
+
+	// ═══════════════════════════════════════════════════════
+	//  End / Results
+	// ═══════════════════════════════════════════════════════
+	async function endGame() {
+		gameActive = false;
+		cancelAnimationFrame(gameLoopId);
+		window.removeEventListener('resize', resizeCanvas);
+		canvas.removeEventListener('mousemove', onMouseMove);
+		canvas.removeEventListener('touchmove', onTouchMove);
+
+		var finalPlayers = await dbGetPlayers(sessionCode);
+		var results = Object.keys(finalPlayers).map(function(id) {
+			var p = finalPlayers[id];
+			return { name: p.name, color: p.color, score: p.score || 0 };
+		}).sort(function(a, b) { return b.score - a.score; });
+
+		if (isHost) await dbUpdateSession(sessionCode, { status: 'results' });
+		showResults(results);
+	}
+
+	function showResults(results) {
+		showScreen('results-screen');
+		if (!results.length) return;
+		var winner = results[0];
+		document.getElementById('winner-banner').textContent =
+			'🏆 ' + winner.name + ' wins with ' + winner.score + ' catches!';
+
+		var list = document.getElementById('results-list');
+		list.innerHTML = '';
+		var medals = ['🥇','🥈','🥉'];
+		results.forEach(function(p, i) {
+			var row = document.createElement('div');
+			row.className = 'result-row' + (i === 0 ? ' winner' : '');
+			row.innerHTML =
+				'<span class="rank-badge">'+(medals[i]||(i+1))+'</span>'+
+				'<div class="player-dot" style="background:'+p.color+'"></div>'+
+				'<span>'+p.name+'</span>'+
+				'<span class="result-score">'+p.score+'</span>';
+			list.appendChild(row);
+		});
+		launchConfetti(winner.color);
+	}
+
+	function launchConfetti(color) {
+		var cols = [color, '#fff', '#f7c948', '#ff6b6b'];
+		for (var i = 0; i < 60; i++) {
+			var el = document.createElement('div');
+			el.className = 'confetto';
+			el.style.cssText =
+				'left:'+(Math.random()*100)+'vw;top:-20px;'+
+				'background:'+cols[Math.floor(Math.random()*cols.length)]+';'+
+				'animation-duration:'+(1.5+Math.random()*2)+'s;'+
+				'animation-delay:'+(Math.random()*0.8)+'s;'+
+				'width:'+(6+Math.random()*10)+'px;'+
+				'height:'+(6+Math.random()*10)+'px;'+
+				'border-radius:'+(Math.random()>0.5?'50%':'2px')+';';
+			document.body.appendChild(el);
+			setTimeout(function() { el.remove(); }, 4000);
+		}
+	}
+
+	// ═══════════════════════════════════════════════════════
+	//  Navigation
+	// ═══════════════════════════════════════════════════════
+	async function backToLobby() {
+		cleanup();
+		players = {};
+		if (isHost) await dbUpdateSession(sessionCode, { status: 'lobby' });
+		enterLobby();
+	}
+
+	async function backToHome() {
+		cleanup();
+		await dbRemovePlayer(myId, sessionCode);
+		showScreen('setup-screen');
+		history.replaceState({}, '', location.pathname);
+	}
+
+	function cleanup() {
+		gameActive = false;
+		if (gameLoopId) { cancelAnimationFrame(gameLoopId); gameLoopId = null; }
+		if (unsubSession) { unsubSession(); unsubSession = null; }
+		if (unsubPlayers) { unsubPlayers(); unsubPlayers = null; }
+		destroyPeer();
+		balls = []; particles = [];
+	}
+</script>
+</body>
+</html>
